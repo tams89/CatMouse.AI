@@ -1,0 +1,26 @@
+# Prey Detection Configuration
+# Copy to /opt/BalrogCatPreyAnalyzer/config.yaml
+
+mqtt:
+  broker: "localhost"
+  port: 1883
+  username: ""
+  password: ""
+  topic_subscribe: "frigate/events"
+  topic_publish: "catflap/prey_detected"
+
+frigate:
+  url: "http://localhost:5000"
+
+detection:
+  confidence_threshold: 0.7
+  prey_types:
+    - mouse
+    - bird
+    - lizard
+    - slow-worm
+
+telegram:
+  enabled: false
+  bot_token: ""
+  chat_id: ""

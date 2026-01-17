@@ -1,0 +1,142 @@
+# Cat Prey Detection Package for Home Assistant
+# Place this file in /config/packages/cat_prey_detection.yaml
+
+# Input booleans for manual control
+input_boolean:
+  prey_detection_enabled:
+    name: "Prey Detection Enabled"
+    icon: mdi:cat
+
+  cat_flap_auto_lock:
+    name: "Auto-lock Cat Flap on Prey"
+    icon: mdi:lock-smart
+
+# Input numbers for configuration
+input_number:
+  prey_detection_lock_duration:
+    name: "Lock Duration (minutes)"
+    min: 1
+    max: 30
+    step: 1
+    initial: 5
+    unit_of_measurement: "min"
+    icon: mdi:timer
+
+# MQTT sensors for prey detection
+mqtt:
+  sensor:
+    - name: "Prey Detection Status"
+      state_topic: "catflap/prey_detected"
+      value_template: "{{ value_json.status }}"
+      json_attributes_topic: "catflap/prey_detected"
+      json_attributes_template: "{{ value_json | tojson }}"
+
+  binary_sensor:
+    - name: "Cat Carrying Prey"
+      state_topic: "catflap/prey_detected"
+      value_template: "{{ value_json.prey_detected }}"
+      payload_on: true
+      payload_off: false
+      device_class: problem
+      
+# Template sensors
+template:
+  - sensor:
+      - name: "Last Cat Detection"
+        state: >
+          {{ as_timestamp(states.binary_sensor.frigate_garden_catflap_cat.last_changed) 
+             | timestamp_custom('%H:%M:%S') }}
+        icon: mdi:cat
+
+# Automations
+automation:
+  # Lock cat flap when prey is detected
+  - id: prey_detection_lock_flap
+    alias: "Lock Cat Flap on Prey Detection"
+    description: "Locks the cat flap when prey is detected to prevent cat entering"
+    trigger:
+      - platform: mqtt
+        topic: catflap/prey_detected
+        payload: "true"
+        value_template: "{{ value_json.prey_detected }}"
+    condition:
+      - condition: state
+        entity_id: input_boolean.cat_flap_auto_lock
+        state: "on"
+      - condition: state
+        entity_id: input_boolean.prey_detection_enabled
+        state: "on"
+    action:
+      # Lock the cat flap (cat can exit but not enter)
+      - service: surepetcare.set_lock_state
+        data:
+          flap_id: !secret sureflap_flap_id
+          lock_state: "locked_in"
+      # Send notification
+      - service: notify.mobile_app_phone  # Update with your device
+        data:
+          title: "🐱🐭 Prey Detected!"
+          message: "Cat flap locked - your cat appears to be carrying prey"
+          data:
+            image: "/api/frigate/notifications/{{ trigger.payload_json.event_id }}/snapshot.jpg"
+            actions:
+              - action: "UNLOCK_FLAP"
+                title: "Unlock Flap"
+              - action: "EXTEND_LOCK"
+                title: "Extend Lock"
+      # Wait for configured duration
+      - delay:
+          minutes: "{{ states('input_number.prey_detection_lock_duration') | int }}"
+      # Unlock
+      - service: surepetcare.set_lock_state
+        data:
+          flap_id: !secret sureflap_flap_id
+          lock_state: "unlocked"
+      # Notify unlocked
+      - service: notify.mobile_app_phone
+        data:
+          title: "🔓 Cat Flap Unlocked"
+          message: "Automatic lock period ended"
+
+  # Handle notification actions
+  - id: prey_detection_unlock_action
+    alias: "Handle Prey Detection Unlock Action"
+    trigger:
+      - platform: event
+        event_type: mobile_app_notification_action
+        event_data:
+          action: "UNLOCK_FLAP"
+    action:
+      - service: surepetcare.set_lock_state
+        data:
+          flap_id: !secret sureflap_flap_id
+          lock_state: "unlocked"
+
+  - id: prey_detection_extend_lock
+    alias: "Handle Prey Detection Extend Lock"
+    trigger:
+      - platform: event
+        event_type: mobile_app_notification_action
+        event_data:
+          action: "EXTEND_LOCK"
+    action:
+      - delay:
+          minutes: 10
+      - service: surepetcare.set_lock_state
+        data:
+          flap_id: !secret sureflap_flap_id
+          lock_state: "unlocked"
+
+  # Daily summary notification
+  - id: prey_detection_daily_summary
+    alias: "Daily Prey Detection Summary"
+    trigger:
+      - platform: time
+        at: "21:00:00"
+    action:
+      - service: notify.mobile_app_phone
+        data:
+          title: "🐱 Cat Flap Daily Summary"
+          message: >
+            Today's activity: 
+            Cat detected {{ states.sensor.frigate_garden_catflap_cat_count.state }} times

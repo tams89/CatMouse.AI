@@ -1,0 +1,124 @@
+# Frigate NVR Configuration
+# For cat detection with NEST camera
+
+mqtt:
+  enabled: true
+  host: localhost
+  port: 1883
+  # user: your_mqtt_user
+  # password: your_mqtt_password
+  topic_prefix: frigate
+
+# Database for event storage
+database:
+  path: /config/frigate.db
+
+# Detectors configuration
+detectors:
+  cpu1:
+    type: cpu
+    num_threads: 4
+  # Uncomment if using Google Coral USB
+  # coral:
+  #   type: edgetpu
+  #   device: usb
+
+# Model configuration
+model:
+  path: /cpu_model.tflite
+  width: 320
+  height: 320
+
+# go2rtc integration for restreaming
+go2rtc:
+  streams:
+    nest_garden:
+      - rtsp://127.0.0.1:8554/nest_garden
+
+cameras:
+  garden_catflap:
+    # FFmpeg configuration
+    ffmpeg:
+      inputs:
+        # Detection stream - using go2rtc restream
+        - path: rtsp://127.0.0.1:8554/nest_garden
+          roles:
+            - detect
+        # Recording stream - higher quality
+        - path: rtsp://127.0.0.1:8554/nest_garden
+          roles:
+            - record
+      output_args:
+        record: preset-record-generic-audio-aac
+
+    # Detection settings
+    detect:
+      enabled: true
+      width: 1280
+      height: 720
+      fps: 5
+      
+    # Object tracking
+    objects:
+      track:
+        - cat
+        - bird
+        - dog  # In case neighbour's dog appears
+      filters:
+        cat:
+          # Minimum confidence score (0-1)
+          min_score: 0.5
+          # Threshold to confirm object (0-1)
+          threshold: 0.7
+          # Minimum size in pixels
+          min_area: 1000
+          # Maximum size (helps filter false positives)
+          max_area: 500000
+
+    # Motion detection (triggers object detection)
+    motion:
+      threshold: 30
+      contour_area: 100
+      mask:
+        - 0,0,0.2,0,0.2,0.2,0,0.2  # Example mask - adjust for your scene
+
+    # Recording configuration
+    record:
+      enabled: true
+      retain:
+        days: 7
+        mode: motion
+      events:
+        retain:
+          default: 14
+          mode: active_objects
+
+    # Snapshots
+    snapshots:
+      enabled: true
+      timestamp: true
+      bounding_box: true
+      crop: false
+      retain:
+        default: 14
+        objects:
+          cat: 30  # Keep cat snapshots longer
+
+    # MQTT publishing for cat events
+    mqtt:
+      enabled: true
+      timestamp: true
+      bounding_box: true
+      crop: true
+      height: 500
+
+# Object event settings
+objects:
+  track:
+    - cat
+    - bird
+
+# UI settings
+ui:
+  live_mode: jsmpeg
+  timezone: Europe/London  # Adjust to your timezone
