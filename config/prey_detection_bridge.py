@@ -14,7 +14,6 @@ import logging
 import os
 import sys
 import time
-from io import BytesIO
 from pathlib import Path
 
 import paho.mqtt.client as mqtt
