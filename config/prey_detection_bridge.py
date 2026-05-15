@@ -118,6 +118,7 @@ class PreyDetectionBridge:
     def __init__(self, config: dict):
         self.config = config
         self.mqtt_client = None
+        self.http_session = requests.Session()
         self.prey_detector = PreyDetector()
         self.frigate_url = config['frigate']['url']
         self.confidence_threshold = config['detection']['confidence_threshold']
@@ -200,7 +201,7 @@ class PreyDetectionBridge:
         """Fetch snapshot from Frigate API."""
         try:
             url = f"{self.frigate_url}/api/events/{event_id}/snapshot.jpg"
-            response = requests.get(url, timeout=10)
+            response = self.http_session.get(url, timeout=10)
             if response.status_code == 200:
                 return response.content
             else:
@@ -242,7 +243,9 @@ class PreyDetectionBridge:
         except KeyboardInterrupt:
             logger.info("Shutting down...")
         finally:
-            self.mqtt_client.disconnect()
+            if self.mqtt_client:
+                self.mqtt_client.disconnect()
+            self.http_session.close()
 
 
 def main():
