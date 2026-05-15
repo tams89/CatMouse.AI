@@ -14,6 +14,7 @@ import logging
 import os
 import sys
 import time
+from collections import OrderedDict
 from pathlib import Path
 
 import paho.mqtt.client as mqtt
@@ -114,6 +115,8 @@ class PreyDetector:
 class PreyDetectionBridge:
     """Main bridge between Frigate events and prey detection."""
     
+    CACHE_SIZE = 100
+
     def __init__(self, config: dict):
         self.config = config
         self.mqtt_client = None
@@ -121,6 +124,7 @@ class PreyDetectionBridge:
         self.prey_detector = PreyDetector()
         self.frigate_url = config['frigate']['url']
         self.confidence_threshold = config['detection']['confidence_threshold']
+        self._event_cache = OrderedDict()
         
     def connect_mqtt(self):
         """Establish MQTT connection."""
@@ -184,14 +188,26 @@ class PreyDetectionBridge:
             
         logger.info(f"Processing cat event: {event_id}")
         
-        # Fetch snapshot from Frigate
-        snapshot = self._get_snapshot(event_id)
-        if not snapshot:
-            logger.warning(f"Could not get snapshot for event {event_id}")
-            return
+        # Check cache first
+        if event_id in self._event_cache:
+            logger.info(f"Using cached result for event {event_id}")
+            result = self._event_cache[event_id]
+            # Move to end (most recently used)
+            self._event_cache.move_to_end(event_id)
+        else:
+            # Fetch snapshot from Frigate
+            snapshot = self._get_snapshot(event_id)
+            if not snapshot:
+                logger.warning(f"Could not get snapshot for event {event_id}")
+                return
+
+            # Analyze for prey
+            result = self.prey_detector.analyze_image(snapshot)
             
-        # Analyze for prey
-        result = self.prey_detector.analyze_image(snapshot)
+            # Update cache
+            self._event_cache[event_id] = result
+            if len(self._event_cache) > self.CACHE_SIZE:
+                self._event_cache.popitem(last=False)
         
         # Publish result
         self._publish_result(event_id, result)
