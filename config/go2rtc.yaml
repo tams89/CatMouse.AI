@@ -1,0 +1,27 @@
+# go2rtc Configuration
+# Converts NEST camera stream to local RTSP for Frigate
+
+streams:
+  # NEST camera stream - replace with your credentials
+  nest_garden:
+    # Option 1: Using Google SDM API directly
+    - "nest://sdm_project/{DEVICE_ACCESS_PROJECT_ID}?client_id={CLIENT_ID}&client_secret={CLIENT_SECRET}&refresh_token={REFRESH_TOKEN}"
+    
+    # Option 2: Using Home Assistant camera entity (simpler)
+    # - "homeassistant://camera.garden_camera"
+
+# WebRTC configuration for live viewing
+webrtc:
+  listen: ":8555"
+  candidates:
+    - stun:stun.l.google.com:19302
+
+# API and RTSP ports
+api:
+  listen: ":1984"
+rtsp:
+  listen: ":8554"
+
+# Logging
+log:
+  level: info

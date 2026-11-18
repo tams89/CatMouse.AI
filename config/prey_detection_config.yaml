@@ -1,0 +1,43 @@
+# ==============================================================================
+# CatMouse.AI - Prey Detection Bridge Configuration
+# ==============================================================================
+
+# Detection Engine Provider:
+# Options: "gemini" (Cloud VLM - recommended), "ollama" (Local RTX 3090 VLM), "dummy" (testing)
+provider: "gemini"
+
+gemini:
+  api_key: "" # Set here or via GEMINI_API_KEY environment variable
+  model: "gemini-3.8-flash"
+  timeout_seconds: 5
+
+ollama:
+  host: "http://localhost:11434"
+  model: "qwen2.5-vl:7b"
+  timeout_seconds: 10
+
+detection:
+  confidence_threshold: 0.7
+  prey_types:
+    - mouse
+    - rat
+    - bird
+    - lizard
+    - rabbit
+    - unknown
+
+mqtt:
+  broker: "192.168.1.X" # Home Assistant / Mosquitto MQTT broker IP
+  port: 1883
+  username: ""
+  password: ""
+  topic_subscribe: "frigate/events"
+  topic_publish: "catflap/prey_detected"
+
+server:
+  host: "0.0.0.0"
+  port: 8095
+
+homeassistant:
+  snapshot_url: "http://YOUR_HA_IP:8123/local/prey_detection/latest.jpg"
+  snapshot_path: "/config/www/prey_detection/latest.jpg"

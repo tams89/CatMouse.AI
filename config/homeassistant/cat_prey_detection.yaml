@@ -1,0 +1,524 @@
+# ==============================================================================
+# Cat Prey Detection & Automated Flap Lock Package
+# Home Assistant Package - Smart Cat Flap Prey Detection
+# Integrates: Google Nest Camera (Garden), Sure Petcare Flap (Utility Room), MQTT
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# Manual Control & Safety Arming Toggles
+# ------------------------------------------------------------------------------
+input_boolean:
+  prey_detection_enabled:
+    name: "Prey Detection System"
+    icon: mdi:cat
+    initial: on
+
+  cat_flap_auto_lock:
+    name: "Auto-Lock Cat Flap on Prey"
+    icon: mdi:lock-alert
+    initial: on
+
+  cat_flap_curfew_enabled:
+    name: "Cat Flap Curfew Schedule"
+    icon: mdi:clock-time-eight-outline
+    initial: on
+
+# ------------------------------------------------------------------------------
+# Configurable Parameters, Curfew Times & Cooldowns
+# ------------------------------------------------------------------------------
+input_number:
+  prey_detection_lock_duration:
+    name: "Prey Lock Duration"
+    min: 5
+    max: 120
+    step: 5
+    initial: 30
+    unit_of_measurement: "min"
+    icon: mdi:timer-lock
+
+  prey_detection_analysis_cooldown:
+    name: "Motion Analysis Cooldown"
+    min: 5
+    max: 120
+    step: 5
+    initial: 15
+    unit_of_measurement: "sec"
+    icon: mdi:timer-sand
+
+  prey_detection_recheck_cooldown:
+    name: "Prey Alert Cooldown"
+    min: 1
+    max: 15
+    step: 1
+    initial: 5
+    unit_of_measurement: "min"
+    icon: mdi:bell-sleep
+
+input_datetime:
+  cat_flap_curfew_start:
+    name: "Curfew Start Time"
+    has_date: false
+    has_time: true
+    initial: "22:00:00"
+    icon: mdi:weather-night
+
+  cat_flap_curfew_end:
+    name: "Curfew End Time"
+    has_date: false
+    has_time: true
+    initial: "07:00:00"
+    icon: mdi:weather-sunset-up
+
+# ------------------------------------------------------------------------------
+# Timers (Live Countdown for Dashboard & Mobile)
+# ------------------------------------------------------------------------------
+timer:
+  cat_prey_lockout:
+    name: "Prey Lockout Timer"
+    duration: "00:30:00"
+    restore: true
+    icon: mdi:timer-lock
+
+# ------------------------------------------------------------------------------
+# MQTT Sensors (Bridged from Vision AI Model)
+# ------------------------------------------------------------------------------
+mqtt:
+  binary_sensor:
+    - name: "Cat Carrying Prey"
+      unique_id: cat_carrying_prey
+      state_topic: "catflap/prey_detected"
+      value_template: "{{ value_json.prey_detected }}"
+      payload_on: true
+      payload_off: false
+      device_class: problem
+      icon: mdi:rodent
+
+  sensor:
+    - name: "Prey Detection Status"
+      unique_id: prey_detection_status
+      state_topic: "catflap/prey_detected"
+      value_template: "{{ value_json.status | default('clear') }}"
+      json_attributes_topic: "catflap/prey_detected"
+      icon: mdi:shield-cat
+
+    - name: "Prey Type"
+      unique_id: prey_detection_type
+      state_topic: "catflap/prey_detected"
+      value_template: "{{ value_json.prey_type | default('none') }}"
+      icon: mdi:paw
+
+# ------------------------------------------------------------------------------
+# Template Sensors
+# ------------------------------------------------------------------------------
+template:
+  - binary_sensor:
+      - name: "Cat Outdoors"
+        unique_id: cat_outdoors
+        device_class: presence
+        icon: mdi:cat
+        state: >
+          {{ is_state('binary_sensor.cinnamon', 'off') }}
+
+      - name: "Cat Flap Curfew Active"
+        unique_id: cat_flap_curfew_active
+        device_class: running
+        icon: mdi:weather-night
+        state: >
+          {% if is_state('input_boolean.cat_flap_curfew_enabled', 'on') %}
+            {% set s = states('input_datetime.cat_flap_curfew_start') %}
+            {% set e = states('input_datetime.cat_flap_curfew_end') %}
+            {% set now_time = now().strftime('%H:%M:%S') %}
+            {% if s <= e %}
+              {{ s <= now_time < e }}
+            {% else %}
+              {{ now_time >= s or now_time < e }}
+            {% endif %}
+          {% else %}
+            false
+          {% endif %}
+
+  - sensor:
+      - name: "Last Cat Prey Event"
+        unique_id: last_cat_prey_event
+        icon: mdi:clock-alert-outline
+        state: >
+          {% if states('binary_sensor.cat_carrying_prey') == 'on' %}
+            {{ now().strftime('%Y-%m-%d %H:%M:%S') }}
+          {% else %}
+            {{ this.state | default('None', true) }}
+          {% endif %}
+
+# ------------------------------------------------------------------------------
+# REST Commands
+# ------------------------------------------------------------------------------
+rest_command:
+  cat_prey_analyze_snapshot:
+    url: "http://YOUR_BRIDGE_IP:8095/analyze"
+    method: POST
+    headers:
+      content-type: "application/json"
+    payload: >
+      {
+        "event_id": "garden_motion_{{ now().timestamp() | int }}",
+        "snapshot_url": "http://YOUR_HA_IP:8123/local/prey_detection/latest.jpg"
+      }
+    timeout: 10
+
+# ------------------------------------------------------------------------------
+# Scripts: Restoration and Curfew Resumption
+# ------------------------------------------------------------------------------
+script:
+  cat_flap_restore_lock_state:
+    alias: "Cat Flap: Restore Lock State"
+    description: "Unlocks entry from prey lockout and restores/resumes curfew if active"
+    mode: restart
+    sequence:
+      - action: timer.cancel
+        target:
+          entity_id: timer.cat_prey_lockout
+      - action: lock.unlock
+        target:
+          entity_id: lock.utility_room_locked_out
+      - choose:
+          - conditions:
+              - condition: state
+                entity_id: binary_sensor.cat_flap_curfew_active
+                state: "on"
+            sequence:
+              - action: lock.lock
+                target:
+                  entity_id: lock.utility_room_locked_in
+              - action: notify.mobile_app_phone_1
+                data:
+                  title: "🔓 Flap Entry Unlocked — Curfew Resumed"
+                  message: >
+                    Prey lockout expired. Flap entry unlocked. Curfew is active: indoor exit remains locked until {{ states('input_datetime.cat_flap_curfew_end')[:5] }}.
+              - action: notify.mobile_app_phone_2
+                data:
+                  title: "🔓 Flap Entry Unlocked — Curfew Resumed"
+                  message: >
+                    Prey lockout expired. Flap entry unlocked. Curfew is active: indoor exit remains locked until {{ states('input_datetime.cat_flap_curfew_end')[:5] }}.
+        default:
+          - action: lock.unlock
+            target:
+              entity_id: lock.utility_room_locked_in
+          - action: notify.mobile_app_phone_1
+            data:
+              title: "🔓 Cat Flap Fully Restored"
+              message: "Prey lockout expired. Flap lock restored to normal (fully unlocked)."
+          - action: notify.mobile_app_phone_2
+            data:
+              title: "🔓 Cat Flap Fully Restored"
+              message: "Prey lockout expired. Flap lock restored to normal (fully unlocked)."
+
+# ------------------------------------------------------------------------------
+# Automations
+# ------------------------------------------------------------------------------
+automation:
+  # 1. Snapshot Capture on Garden Motion & Trigger AI Prey Analysis (with Cooldown)
+  - id: cat_prey_detection_motion_snapshot
+    alias: "Cat Flap: Capture Garden Motion Snapshot"
+    description: "Captures snapshot upon Nest motion and triggers AI prey analysis with rate-limit cooldown"
+    mode: single
+    max_exceeded: silent
+    trigger:
+      - platform: device
+        domain: nest
+        device_id: YOUR_NEST_CAMERA_DEVICE_ID
+        type: camera_motion
+      - platform: device
+        domain: nest
+        device_id: YOUR_NEST_CAMERA_DEVICE_ID
+        type: camera_person
+      - platform: state
+        entity_id: event.garden_garden_camera_motion
+    condition:
+      - condition: state
+        entity_id: input_boolean.prey_detection_enabled
+        state: "on"
+      - condition: template
+        value_template: >
+          {% set last = state_attr('automation.cat_flap_capture_garden_motion_snapshot', 'last_triggered') %}
+          {{ last is none or (now() - last).total_seconds() >= (states('input_number.prey_detection_analysis_cooldown') | default(15, true) | int) }}
+    action:
+      - action: camera.snapshot
+        target:
+          entity_id: camera.garden_garden_camera
+        data:
+          filename: "/config/www/prey_detection/latest.jpg"
+      - delay:
+          milliseconds: 500
+      - action: rest_command.cat_prey_analyze_snapshot
+
+  # 2. Main Flap Intercept & Lock Automation (with Cooldown Re-arm & Refresh)
+  - id: cat_prey_detection_lock_flap
+    alias: "Cat Flap: Lock on Prey Detection"
+    description: "Locks the utility room cat flap OUT on prey; refreshes lockout timer if re-detected during active lock"
+    mode: restart
+    trigger:
+      - platform: state
+        entity_id: binary_sensor.cat_carrying_prey
+        to: "on"
+    condition:
+      - condition: state
+        entity_id: input_boolean.prey_detection_enabled
+        state: "on"
+    action:
+      - choose:
+          # Scenario A: Auto-lock is armed
+          - conditions:
+              - condition: state
+                entity_id: input_boolean.cat_flap_auto_lock
+                state: "on"
+            sequence:
+              - choose:
+                  # Branch A1: Cat re-detected while flap already locked out -> Refresh timer without duplicate loud alerts
+                  - conditions:
+                      - condition: state
+                        entity_id: lock.utility_room_locked_out
+                        state: "locked"
+                      - condition: state
+                        entity_id: timer.cat_prey_lockout
+                        state: "active"
+                    sequence:
+                      - action: timer.start
+                        target:
+                          entity_id: timer.cat_prey_lockout
+                        data:
+                          duration: "{{ (states('input_number.prey_detection_lock_duration') | int) * 60 }}"
+                      - action: system_log.write
+                        data:
+                          message: "Prey re-detected while flap locked. Lockout timer refreshed to {{ states('input_number.prey_detection_lock_duration') }}m."
+                          level: info
+
+                # Branch A2: Fresh detection -> Lock flap, start countdown timer, and send actionable notification
+                default:
+                  - action: lock.lock
+                    target:
+                      entity_id: lock.utility_room_locked_out
+                  - action: timer.start
+                    target:
+                      entity_id: timer.cat_prey_lockout
+                    data:
+                      duration: "{{ (states('input_number.prey_detection_lock_duration') | int) * 60 }}"
+                  - action: notify.mobile_app_phone_1
+                    data:
+                      title: "🐱🐭 Prey Detected — Flap Locked!"
+                      message: >
+                        Cinnamon was detected approaching with prey ({{ states('sensor.prey_type') }}).
+                        The utility room cat flap has been locked OUT for {{ states('input_number.prey_detection_lock_duration') | int }} minutes.
+                      data:
+                        image: "/local/prey_detection/latest.jpg"
+                        actions:
+                          - action: "UNLOCK_CAT_FLAP"
+                            title: "🔓 Unlock Now"
+                          - action: "EXTEND_CAT_FLAP_LOCK"
+                            title: "⏱️ Add 10m"
+                  - action: notify.mobile_app_phone_2
+                    data:
+                      title: "🐱🐭 Prey Detected — Flap Locked!"
+                      message: >
+                        Cinnamon was detected approaching with prey ({{ states('sensor.prey_type') }}).
+                        The utility room cat flap has been locked OUT for {{ states('input_number.prey_detection_lock_duration') | int }} minutes.
+                      data:
+                        image: "/local/prey_detection/latest.jpg"
+                        actions:
+                          - action: "UNLOCK_CAT_FLAP"
+                            title: "🔓 Unlock Now"
+                          - action: "EXTEND_CAT_FLAP_LOCK"
+                            title: "⏱️ Add 10m"
+
+        # Scenario B: Auto-lock is disarmed -> Notification only (Dry Run)
+        default:
+          - action: notify.mobile_app_phone_1
+            data:
+              title: "🐱🐭 Prey Detected (Auto-Lock Disarmed)"
+              message: >
+                Cinnamon was detected with prey ({{ states('sensor.prey_type') }}), but Auto-Lock is currently disarmed.
+                The flap was NOT locked.
+              data:
+                image: "/local/prey_detection/latest.jpg"
+                actions:
+                  - action: "FORCE_LOCK_CAT_FLAP"
+                    title: "🔒 Lock Flap Now"
+          - action: notify.mobile_app_phone_2
+            data:
+              title: "🐱🐭 Prey Detected (Auto-Lock Disarmed)"
+              message: >
+                Cinnamon was detected with prey ({{ states('sensor.prey_type') }}), but Auto-Lock is currently disarmed.
+                The flap was NOT locked.
+              data:
+                image: "/local/prey_detection/latest.jpg"
+                actions:
+                  - action: "FORCE_LOCK_CAT_FLAP"
+                    title: "🔒 Lock Flap Now"
+
+  # 3. Notification Action: Manual Immediate Unlock
+  - id: cat_prey_detection_unlock_action
+    alias: "Cat Flap: Handle Notification Unlock Action"
+    description: "Unlocks the flap immediately and restores curfew if active"
+    mode: single
+    trigger:
+      - platform: event
+        event_type: mobile_app_notification_action
+        event_data:
+          action: "UNLOCK_CAT_FLAP"
+    action:
+      - action: script.cat_flap_restore_lock_state
+
+  # 4. Notification Action: Force Lock (when auto-lock was disarmed)
+  - id: cat_prey_detection_force_lock_action
+    alias: "Cat Flap: Handle Notification Force Lock Action"
+    description: "Manually locks out the flap when prompted from a disarmed alert"
+    mode: single
+    trigger:
+      - platform: event
+        event_type: mobile_app_notification_action
+        event_data:
+          action: "FORCE_LOCK_CAT_FLAP"
+    action:
+      - action: lock.lock
+        target:
+          entity_id: lock.utility_room_locked_out
+      - action: timer.start
+        target:
+          entity_id: timer.cat_prey_lockout
+        data:
+          duration: "{{ (states('input_number.prey_detection_lock_duration') | int) * 60 }}"
+      - action: notify.mobile_app_phone_1
+        data:
+          title: "🔒 Flap Locked Out"
+          message: "Cat flap locked OUT manually."
+      - action: notify.mobile_app_phone_2
+        data:
+          title: "🔒 Flap Locked Out"
+          message: "Cat flap locked OUT manually."
+
+  # 5. Notification Action: Extend Lock Duration by 10 Minutes
+  - id: cat_prey_detection_extend_lock_action
+    alias: "Cat Flap: Handle Notification Extend Lock Action"
+    description: "Extends flap lockout timer by 10 additional minutes"
+    mode: single
+    trigger:
+      - platform: event
+        event_type: mobile_app_notification_action
+        event_data:
+          action: "EXTEND_CAT_FLAP_LOCK"
+    action:
+      - choose:
+          - conditions:
+              - condition: state
+                entity_id: timer.cat_prey_lockout
+                state: "active"
+            sequence:
+              - action: timer.change
+                target:
+                  entity_id: timer.cat_prey_lockout
+                data:
+                  duration: "00:10:00"
+        default:
+          - action: timer.start
+            target:
+              entity_id: timer.cat_prey_lockout
+            data:
+              duration: "00:10:00"
+      - action: notify.mobile_app_phone_1
+        data:
+          title: "⏱️ Lockout Extended"
+          message: "Added 10 minutes to cat flap lockout countdown."
+      - action: notify.mobile_app_phone_2
+        data:
+          title: "⏱️ Lockout Extended"
+          message: "Added 10 minutes to cat flap lockout countdown."
+
+  # 6. Timer Expiration: Restore Flap & Resume Curfew Mode
+  - id: cat_prey_detection_timer_expired
+    alias: "Cat Flap: Prey Lockout Timer Expired"
+    description: "Restores flap entry and curfew mode when the prey lockout timer finishes"
+    mode: single
+    trigger:
+      - platform: event
+        event_type: timer.finished
+        event_data:
+          entity_id: timer.cat_prey_lockout
+    action:
+      - action: script.cat_flap_restore_lock_state
+
+  # 7. Scheduled Curfew: Lock Inward at Curfew Start
+  - id: cat_flap_curfew_start
+    alias: "Cat Flap: Start Scheduled Curfew"
+    description: "Locks cat flap indoor exit at scheduled curfew start time"
+    mode: single
+    trigger:
+      - platform: time
+        at: input_datetime.cat_flap_curfew_start
+    condition:
+      - condition: state
+        entity_id: input_boolean.cat_flap_curfew_enabled
+        state: "on"
+    action:
+      - action: lock.lock
+        target:
+          entity_id: lock.utility_room_locked_in
+      - action: notify.mobile_app_phone_1
+        data:
+          title: "🌙 Cat Flap Curfew Active"
+          message: "Scheduled curfew has started. Flap indoor exit locked until {{ states('input_datetime.cat_flap_curfew_end')[:5] }}."
+      - action: notify.mobile_app_phone_2
+        data:
+          title: "🌙 Cat Flap Curfew Active"
+          message: "Scheduled curfew has started. Flap indoor exit locked until {{ states('input_datetime.cat_flap_curfew_end')[:5] }}."
+
+  # 8. Scheduled Curfew: Unlock Inward at Curfew End
+  - id: cat_flap_curfew_end
+    alias: "Cat Flap: End Scheduled Curfew"
+    description: "Unlocks cat flap indoor exit at scheduled curfew end time"
+    mode: single
+    trigger:
+      - platform: time
+        at: input_datetime.cat_flap_curfew_end
+    condition:
+      - condition: state
+        entity_id: input_boolean.cat_flap_curfew_enabled
+        state: "on"
+    action:
+      - action: lock.unlock
+        target:
+          entity_id: lock.utility_room_locked_in
+      - action: notify.mobile_app_phone_1
+        data:
+          title: "☀️ Cat Flap Curfew Ended"
+          message: "Curfew has ended. Flap unlocked for the day."
+      - action: notify.mobile_app_phone_2
+        data:
+          title: "☀️ Cat Flap Curfew Ended"
+          message: "Curfew has ended. Flap unlocked for the day."
+
+  # 9. Curfew Toggle & Startup Sync
+  - id: cat_flap_curfew_toggle_sync
+    alias: "Cat Flap: Sync Curfew on Toggle"
+    description: "Immediately syncs lock state when curfew toggle is modified or on boot"
+    mode: restart
+    trigger:
+      - platform: state
+        entity_id: input_boolean.cat_flap_curfew_enabled
+      - platform: homeassistant
+        event: start
+    action:
+      - choose:
+          - conditions:
+              - condition: state
+                entity_id: binary_sensor.cat_flap_curfew_active
+                state: "on"
+            sequence:
+              - action: lock.lock
+                target:
+                  entity_id: lock.utility_room_locked_in
+          - conditions:
+              - condition: state
+                entity_id: input_boolean.cat_flap_curfew_enabled
+                state: "off"
+            sequence:
+              - action: lock.unlock
+                target:
+                  entity_id: lock.utility_room_locked_in

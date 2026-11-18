@@ -1,0 +1,15 @@
+FROM python:3.12-slim
+
+WORKDIR /app
+
+RUN pip install --no-cache-dir paho-mqtt requests pyyaml
+
+COPY config/prey_detection_bridge.py /app/config/prey_detection_bridge.py
+COPY config/prey_detection_config.yaml /app/config/prey_detection_config.yaml
+
+EXPOSE 8095
+
+ENV SERVER_PORT=8095
+ENV PYTHONUNBUFFERED=1
+
+CMD ["python", "/app/config/prey_detection_bridge.py"]

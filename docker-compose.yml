@@ -1,0 +1,16 @@
+version: '3.8'
+
+services:
+  # CatMouse.AI Prey Detection Bridge (VLM Vision + MQTT + Home Assistant Webhook)
+  catmouse-bridge:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.prey-detection
+    container_name: catmouse-bridge
+    restart: unless-stopped
+    ports:
+      - "8095:8095"
+    env_file:
+      - .env
+    volumes:
+      - ./config/prey_detection_config.yaml:/app/config/prey_detection_config.yaml:ro
